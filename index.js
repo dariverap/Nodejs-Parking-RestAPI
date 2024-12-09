@@ -1,71 +1,154 @@
-const express = require('express')
-const mysql = require('mysql')
-const bodyParser = require('body-parser')
+const express = require('express');
+const mysql = require('mysql');
+const bodyParser = require('body-parser');
 
-const app = express()
+const app = express();
 
 app.use(function(req, res, next) {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', '*');
-    res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
-    next()
-})
+    res.setHeader('Access-Control-Allow-Origin', '*'); // Permite solicitudes desde cualquier origen
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS'); // Métodos permitidos
+    res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization'); // Encabezados permitidos
+    next();
+});
 
-app.use(bodyParser.json())
+app.use(bodyParser.json());
 
-const PUERTO = 8080
+const PUERTO = process.env.PORT || 3306;
 
-const conexion = mysql.createConnection(
-    {
-        host:'localhost',
-        database: 'bdparking',
-        user: 'root',
-        password: ''
+
+// Definimos el pool de conexiones correctamente
+const pool = mysql.createPool({
+    host: 'bzcshl1sodk5akovfrpd-mysql.services.clever-cloud.com',
+    database: 'bzcshl1sodk5akovfrpd',
+    user: 'uvbvtkfpsz4rmfaq',
+    password: 'YWBSv09RCqw4mkA64OAi',
+    connectionLimit: 10,  // Número máximo de conexiones en el pool
+    waitForConnections: true,
+    queueLimit: 0
+});
+
+const conexion = {
+    query: (sql, params, callback) => {
+        pool.getConnection((err, connection) => {
+            if (err) {
+                console.error('Error obteniendo conexión:', err.message);
+                return callback(err, null);
+            }
+
+            connection.query(sql, params, (error, results) => {
+                connection.release(); // Liberar la conexión
+                if (error) {
+                    console.error('Error ejecutando consulta:', error.message);
+                    return callback(error, null);
+                }
+                callback(null, results);
+            });
+        });
     }
-)
+};
+
+// Ahora obtenemos una conexión desde el pool
+pool.getConnection((err, connection) => {
+    if (err) {
+        console.error('Error obteniendo conexión del pool:', err.stack);
+        return;
+    }
+    console.log('Conexión exitosa al pool con el id ' + connection.threadId);
+    connection.release();  // Liberamos la conexión cuando terminamos de usarla
+});
 
 app.listen(PUERTO, () => {
     console.log(`Servidor corriendo en el puerto ${PUERTO}`);
-})
+});
 
-conexion.connect(error => {
-    if(error) throw error
-    console.log('Conexión exitosa a la base de datos');
-})
 
 app.get('/', (req, res) => {
     res.send('API')
 })
-app.get('/usuarios', (req, res) => {
 
-    const query = 'SELECT * FROM usuario;'
+app.get('/obtenerusuarios', (req, res) => {
+    const query = `SELECT * FROM usuario WHERE estado = 1`;
+
     conexion.query(query, (error, resultado) => {
-        if(error) return console.error(error.message)
-
-        const obj = {}
-        if(resultado.length > 0) {
-            obj.listaUsuarios = resultado
-            res.json(obj)
-        } else {
-            res.send('No hay registros')
+        if (error) {
+            console.error(error.message);
+            return res.status(500).send('Error en la consulta');
         }
-    })
-})
+
+        if (resultado.length > 0) {
+            const obj = { listaUsuarios: resultado };
+            res.json(obj);
+        } else {
+            res.status(404).send('No hay registros');
+        }
+    });
+});
+
+app.get('/usuario/estado/:id', (req, res) => {
+    const userId = req.params.id;
+
+    // Consulta para obtener el estado del usuario
+    const query = 'SELECT estado FROM usuario WHERE id = ?';
+    conexion.query(query, [userId], (error, results) => {
+        if (error) {
+            console.error(error.message);
+            return res.status(500).json({ error: 'Error al consultar el estado del usuario' });
+        }
+
+        if (results.length === 0) {
+            return res.status(404).json({ mensaje: 'Usuario no encontrado' });
+        }
+
+        // Devolver solo el estado como número
+        const estado = results[0].estado;
+        res.json(estado);
+    });
+});
+
+
+app.get('/usuarios', (req, res) => {
+    const query = `
+        SELECT 
+            usuario.id,
+            usuario.nombre,
+            usuario.apellido,
+            usuario.correo,
+            usuario.id_rol,
+            usuario.estado,
+            rol.nombre as rol_nombre
+        FROM usuario
+        JOIN rol ON usuario.id_rol = rol.id;
+    `;
+
+    conexion.query(query, (error, resultado) => {
+        if (error) {
+            console.error(error.message);
+            return res.status(500).send('Error en la consulta');
+        }
+
+        if (resultado.length > 0) {
+            const obj = { listaUsuarios: resultado };
+            res.json(obj);
+        } else {
+            res.status(404).send('No hay registros');
+        }
+    });
+});
 
 app.get('/usuario/:id', (req, res) => {
-    const { id } = req.params
+    const { id } = req.params;
 
-    const query = `SELECT * FROM usuario WHERE id=${id};`
+    const query = `SELECT * FROM usuario WHERE id=${id};`;
     conexion.query(query, (error, resultado) => {
-        if(error) return console.error(error.message)
+        if (error) return console.error(error.message);
 
-        if(resultado.length > 0){
+        if (resultado.length > 0) {
             res.json(resultado);
         } else {
             res.send('No hay registros');
         }
-    })
-})
+    });
+});
 
 app.post('/usuario/add', (req, res) => {
     const usuario = {
@@ -73,39 +156,79 @@ app.post('/usuario/add', (req, res) => {
         apellido: req.body.apellido,
         correo: req.body.correo,
         contrasena: req.body.contrasena,
-        id_rol: req.body.id_rol        
-    }
+        id_rol: req.body.id_rol,
+        estado: 1 // Establecer el estado por defecto como activo
+    };
 
-    const query = `INSERT INTO usuario SET ?`
+    const query = `INSERT INTO usuario SET ?`;
     conexion.query(query, usuario, (error) => {
-        if(error) return console.error(error.message)
+        if (error) return console.error(error.message);
 
-        res.json(`Se insertó correctamente el usuario`)
-    })
-})
+        res.json(`Se insertó correctamente el usuario`);
+    });
+});
 
 app.put('/usuario/update/:id', (req, res) => {
-    const { id } = req.params
-    const { nombre, apellido, correo, contrasena, id_rol } = req.body
+    const { id } = req.params;
+    const { nombre, apellido, correo, contrasena, id_rol, estado } = req.body;
 
-    const query = `UPDATE usuario SET nombre='${nombre}', apellido='${apellido}', correo='${correo}', contrasena='${contrasena}', id_rol='${id_rol}' WHERE id='${id}';`
+    // Construimos la consulta sin comentarios dentro de ella
+    const query = `
+      UPDATE usuario 
+      SET 
+          nombre='${nombre}', 
+          apellido='${apellido}', 
+          correo='${correo}', 
+          contrasena='${contrasena}', 
+          id_rol='${id_rol}', 
+          estado=${estado}
+      WHERE id='${id}';`;
+
+    // Ejecutamos la consulta
     conexion.query(query, (error) => {
-        if(error) return console.log(error.message)
+        if (error) return console.log(error.message);
 
-        res.json(`Se actualizó correctamente el usuario`)
-    })
-})
+        res.json(`Se actualizó correctamente el usuario`);
+    });
+});
 
-app.delete('/usuario/delete/:id', (req, res) => {
-    const { id } = req.params
 
-    const query = `DELETE FROM usuario WHERE id=${id};`
+app.put('/usuario/eliminar/:id', (req, res) => {
+    const { id } = req.params;
+
+    const query = `
+      UPDATE usuario 
+      SET estado=0 
+      WHERE id='${id}';`;
+
     conexion.query(query, (error) => {
-        if(error) return console.log(error.message)
+        if (error) return console.log(error.message);
 
-        res.json(`Se eliminó correctamente el usuario`)
-    })
-})
+        res.json(`Usuario desactivado correctamente`);
+    });
+});
+
+app.put('/usuario/actualizarEstado', (req, res) => {
+    const { id } = req.body;  // Extraemos solo el 'id' del cuerpo de la solicitud
+
+    // Consulta para actualizar el estado del usuario a 1 en la base de datos
+    const query = `UPDATE usuario SET estado = 1 WHERE id = ?`;
+
+    // Ejecutamos la consulta con el 'id' recibido
+    conexion.query(query, [id], (error, results) => {
+        if (error) {
+            console.error(error.message);
+            return res.status(500).json({ message: "Error al actualizar el estado del usuario" });
+        }
+
+        if (results.affectedRows > 0) {
+            return res.json("Estado actualizado correctamente");
+        } else {
+            return res.status(404).json({ message: "Usuario no encontrado" });
+        }
+    });
+});
+
 
 
 app.get('/tarifas', (req, res) => {
@@ -244,21 +367,85 @@ app.delete('/rol/delete/:id', (req, res) => {
 })
 
 
-app.get('/registros', (req, res) => {
+app.get('/registros/:id', (req, res) => {
+    const idUsuario = req.params.id; // Obtener el id_usuario de los parámetros de ruta
 
-    const query = 'SELECT * FROM registro;'
-    conexion.query(query, (error, resultado) => {
-        if(error) return console.error(error.message)
+    // Verificar que se haya proporcionado un id_usuario
+    if (!idUsuario) {
+        return res.status(400).send('El id_usuario es requerido'); // Mensaje de error si falta el id_usuario
+    }
 
-        const obj = {}
-        if(resultado.length > 0) {
-            obj.listaRegistros = resultado
-            res.json(obj)
-        } else {
-            res.send('No hay registros')
+    // Modificar la consulta para filtrar por id_usuario y estado = 1
+    const query = 'SELECT * FROM registro WHERE (estado = 1 OR estado = 2)   AND id_usuario = ?;'; 
+    conexion.query(query, [idUsuario], (error, resultado) => {
+        if (error) {
+            console.error(error.message);
+            return res.status(500).send('Error en el servidor'); // Enviar un mensaje de error
         }
-    })
-})
+
+        const obj = {};
+        if (resultado.length > 0) {
+            obj.listaRegistros = resultado; // Retorna la lista de registros con estado = 1 y el id_usuario especificado
+            res.json(obj);
+        } else {
+            res.send('No hay registros con estado 1 para el usuario especificado');
+        }
+    });
+});
+
+app.get('/verregistros', (req, res) => {
+    const query = 'SELECT * FROM registro  WHERE estado = 1 OR estado = 2;'; // Filtra por estado = 1
+    conexion.query(query, (error, resultado) => {
+        if (error) {
+            console.error(error.message);
+            return res.status(500).send('Error en el servidor'); // Enviar un mensaje de error
+        }
+
+        const obj = {};
+        if (resultado.length > 0) {
+            obj.listaRegistros = resultado; // Retorna la lista de registros con estado = 1
+            res.json(obj);
+        } else {
+            res.send('No hay registros con estado 1');
+        }
+    });
+});
+
+app.get('/listarregistros', (req, res) => {
+    const query = `
+        SELECT 
+            registro.id,
+            DATE(registro.fecha_ingreso) AS fecha_ingreso,
+            TIME(registro.fecha_ingreso) AS hora_ingreso,
+            DATE(registro.fecha_salida) AS fecha_salida,
+            TIME(registro.fecha_salida) AS hora_salida,
+            TIMEDIFF(registro.fecha_salida, registro.fecha_ingreso) AS tiempo_diferencia,
+            registro.id_espacio,
+            registro.patente_vehiculo,
+            CONCAT(usuario.nombre, ' ', usuario.apellido) AS nombre_completo,
+            registro.estado
+        FROM registro
+        JOIN usuario ON registro.id_usuario = usuario.id
+        WHERE registro.estado = 0;
+    `;
+
+    conexion.query(query, (error, resultado) => {
+        if (error) {
+            console.error(error.message);
+            return res.status(500).send('Error en la consulta');
+        }
+
+        if (resultado.length > 0) {
+            const obj = { listaRegistros: resultado };
+            res.json(obj);
+        } else {
+            res.status(404).send('No hay registros con estado = 0');
+        }
+    });
+});
+
+
+
 
 app.get('/registro/:patente', (req, res) => {
     const { patente } = req.params
@@ -285,17 +472,55 @@ app.post('/registro/add', (req, res) => {
         id_espacio: req.body.id_espacio,
         patente_vehiculo: req.body.patente_vehiculo,
         id_usuario: req.body.id_usuario,
-        id_tarifa: req.body.id_tarifa,
-        costo_total: req.body.costo_total
-    }
+        estado: 1
+    };
 
-    const query = `INSERT INTO registro SET ?`
-    conexion.query(query, registro, (error) => {
-        if(error) return console.error(error.message)
+    // Consulta para insertar el registro
+    const insertQuery = `INSERT INTO registro SET ?`;
 
-        res.json(`Se insertó correctamente el registro`)
-    })
-})
+    // Consulta para actualizar el estado del usuario
+    const updateQuery = `UPDATE usuario SET estado = 2 WHERE id = ?`;
+
+    // Iniciar transacción
+    conexion.beginTransaction((err) => {
+        if (err) {
+            return res.status(500).json({ message: 'Error al iniciar transacción', error: err.message });
+        }
+
+        // Ejecutar la consulta de inserción
+        conexion.query(insertQuery, registro, (insertError) => {
+            if (insertError) {
+                return conexion.rollback(() => {
+                    res.status(500).json({ message: 'Error al insertar registro', error: insertError.message });
+                });
+            }
+
+            // Ejecutar la consulta de actualización
+            conexion.query(updateQuery, [registro.id_usuario], (updateError) => {
+                if (updateError) {
+                    return conexion.rollback(() => {
+                        res.status(500).json({ message: 'Error al actualizar estado del usuario', error: updateError.message });
+                    });
+                }
+
+                // Confirmar transacción
+                conexion.commit((commitError) => {
+                    if (commitError) {
+                        return conexion.rollback(() => {
+                            res.status(500).json({ message: 'Error al confirmar transacción', error: commitError.message });
+                        });
+                    }
+
+                    res.json({ message: 'Registro insertado y estado del usuario actualizado correctamente' });
+                });
+            });
+        });
+    });
+});
+
+
+
+
 
 app.put('/registro/update/:id', (req, res) => {
     const { id } = req.params
@@ -308,6 +533,103 @@ app.put('/registro/update/:id', (req, res) => {
         res.json(`Se actualizó correctamente el registro`)
     })
 })
+
+app.put('/registro2/update/:id', (req, res) => {
+    const { id } = req.params;
+
+    // Obtener el id_espacio relacionado con el registro
+    const getEspacioQuery = `SELECT id_espacio FROM registro WHERE id = ?;`;
+    conexion.query(getEspacioQuery, [id], (error, resultado) => {
+        if (error) {
+            console.error(error.message);
+            return res.status(500).send('Error al obtener el espacio relacionado');
+        }
+
+        if (resultado.length === 0) {
+            return res.status(404).send('Registro no encontrado');
+        }
+
+        const idEspacio = resultado[0].id_espacio;
+
+        // Actualizar el atributo disponible en espacio
+        const updateEspacioQuery = `UPDATE espacio SET disponible = 1 WHERE id = ?;`;
+        conexion.query(updateEspacioQuery, [idEspacio], (error) => {
+            if (error) {
+                console.error(error.message);
+                return res.status(500).send('Error al actualizar el atributo disponible en espacio');
+            }
+
+            // Obtener la fecha y hora actuales en el formato deseado
+            const fechaSalida = new Date();
+            const offset = fechaSalida.getTimezoneOffset(); // Obtener el offset en minutos
+            const localDate = new Date(fechaSalida.getTime() - offset * 60000); // Ajustar a la zona horaria local
+
+            // Formatear la fecha a YYYY-MM-DD HH:MM:SS
+            const formattedDate = localDate.toISOString().slice(0, 19).replace('T', ' '); // Formato YYYY-MM-DD HH:MM:SS
+
+            // Actualizar el estado y la fecha_salida en registro
+            const updateRegistroQuery = `UPDATE registro SET estado = 0, fecha_salida = ? WHERE id = ?;`;
+            conexion.query(updateRegistroQuery, [formattedDate, id], (error) => {
+                if (error) {
+                    console.error(error.message);
+                    return res.status(500).send('Error al actualizar el atributo estado y fecha_salida en registro');
+                }
+
+                res.json({ mensaje: 'Los registros fueron actualizados correctamente' });
+            });
+        });
+    });
+});
+
+app.put('/registro2/update2/:id', (req, res) => {
+    const { id } = req.params;
+
+    // Obtener el id_espacio relacionado con el registro
+    const getEspacioQuery = `SELECT id_espacio FROM registro WHERE id = ?;`;
+    conexion.query(getEspacioQuery, [id], (error, resultado) => {
+        if (error) {
+            console.error(error.message);
+            return res.status(500).send('Error al obtener el espacio relacionado');
+        }
+
+        if (resultado.length === 0) {
+            return res.status(404).send('Registro no encontrado');
+        }
+
+        const idEspacio = resultado[0].id_espacio;
+
+        // Actualizar el atributo disponible en espacio
+        const updateEspacioQuery = `UPDATE espacio SET disponible = 0 WHERE id = ?;`;
+        conexion.query(updateEspacioQuery, [idEspacio], (error) => {
+            if (error) {
+                console.error(error.message);
+                return res.status(500).send('Error al actualizar el atributo disponible en espacio');
+            }
+
+            // Obtener la fecha y hora actuales en el formato deseado
+            const fechaSalida = new Date();
+            const offset = fechaSalida.getTimezoneOffset(); // Obtener el offset en minutos
+            const localDate = new Date(fechaSalida.getTime() - offset * 60000); // Ajustar a la zona horaria local
+
+            // Formatear la fecha a YYYY-MM-DD HH:MM:SS
+            const formattedDate = localDate.toISOString().slice(0, 19).replace('T', ' '); // Formato YYYY-MM-DD HH:MM:SS
+
+            // Actualizar el estado y la fecha_salida en registro
+            const updateRegistroQuery = `UPDATE registro SET estado = 2, fecha_salida = ? WHERE id = ?;`;
+            conexion.query(updateRegistroQuery, [formattedDate, id], (error) => {
+                if (error) {
+                    console.error(error.message);
+                    return res.status(500).send('Error al actualizar el atributo estado y fecha_salida en registro');
+                }
+
+                res.json({ mensaje: 'Los registros fueron actualizados correctamente' });
+            });
+        });
+    });
+});
+
+
+
 
 app.delete('/registro/delete/:id', (req, res) => {
     const { id } = req.params
@@ -335,6 +657,22 @@ app.get('/espacios', (req, res) => {
         }
     })
 })
+
+app.get('/verespacios', (req, res) => {
+    const query = 'SELECT * FROM espacio;'
+    conexion.query(query, (error, resultado) => {
+        if (error) return console.error(error.message)
+
+        const obj = {}
+        if (resultado.length > 0) {
+            obj.listaEspacios = resultado
+            res.json(obj)
+        } else {
+            res.send('No hay registros')
+        }
+    })
+})
+
 
 app.get('/espacio/:id', (req, res) => {
     const { id } = req.params
@@ -406,5 +744,3 @@ app.post('/login', (req, res) => {
       }
     });
   });
-
-
